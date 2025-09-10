@@ -30,52 +30,28 @@ jobs:
                "local.settings.json" \
                "*.md"
 
-      - name: Extract Kudu credentials from publish profile
-        id: parse
-        shell: bash
+      - name: Zip Deploy to Kudu (publish profile)
         env:
           PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
         run: |
           set -euo pipefail
-          echo "$PUBLISH_PROFILE" > publishProfile.xml
-          python3 - << 'PY'
-import os, xml.etree.ElementTree as ET
-tree = ET.parse('publishProfile.xml')
-root = tree.getroot()
-pp = None
-for p in root.findall('publishProfile'):
-    if p.get('publishMethod') == 'ZipDeploy':
-        pp = p
-        break
-if pp is None:
-    raise SystemExit('ZipDeploy profile not found in publish profile XML')
-pub_url = pp.get('publishUrl')  # e.g. nzhopslookercoa-***.scm.australiaeast-01.azurewebsites.net:443
-host = pub_url.split(':',1)[0]
-user = pp.get('userName')
-pwd  = pp.get('userPWD')
-print(f"::set-output name=host::{host}")
-print(f"::set-output name=user::{user}")
-print(f"::set-output name=pwd::{pwd}")
-PY
-
-      - name: Zip Deploy to Kudu (publish profile)
-        env:
-          KUDU_HOST: ${{ steps.parse.outputs.host }}
-          KUDU_USER: ${{ steps.parse.outputs.user }}
-          KUDU_PASS: ${{ steps.parse.outputs.pwd }}
-        run: |
-          set -euo pipefail
+          # Extract host and credentials
+          eval "$(python3 .github/scripts/parse_publish_profile.py)"
+          echo "Using Kudu host: $KUDU_HOST"
           if [ -n "${{ github.event.inputs.slot }}" ]; then
-            echo "Note: Slots are not used with direct Kudu zipdeploy; ensure the publish profile corresponds to the slot if required."
+            echo "Note: Slots require a slot-specific publish profile."
           fi
-          curl -sS -u "$KUDU_USER:$KUDU_PASS" \
+          # Perform zipdeploy
+          curl -fSs -u "$KUDU_USER:$KUDU_PASS" \
                -X POST \
                -H "Content-Type: application/zip" \
                --data-binary @functionapp.zip \
                "https://$KUDU_HOST/api/zipdeploy?isAsync=true"
 
       - name: Warm up Function App
+        env:
+          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
         run: |
-          APP_HOST=${{ steps.parse.outputs.host }}
-          APP_HOST=${APP_HOST/.scm./.}
+          eval "$(python3 .github/scripts/parse_publish_profile.py)"
+          APP_HOST="${KUDU_HOST/.scm./.}"
           curl -sS --max-time 10 "https://${APP_HOST}" || true
