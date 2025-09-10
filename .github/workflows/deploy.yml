@@ -2,7 +2,12 @@ name: Deploy Azure Function
 
 on:
   push:
-    branches: [ "main" ] 
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "Optional deployment slot name"
+        required: false
 
 jobs:
   deploy:
@@ -16,14 +21,61 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install (if any)
+      - name: Create deployment package (zip)
         run: |
-          npm ci || npm install
+          zip -r functionapp.zip . \
+            -x "node_modules/*" \
+               ".git/*" \
+               ".github/*" \
+               "local.settings.json" \
+               "*.md"
 
-      - name: Deploy to Azure Functions
-        uses: azure/functions-action@v1
-        with:
-          app-name: ${{ secrets.AZURE_FUNCTIONAPP_NAME }}
-          package: .
-          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+      - name: Extract Kudu credentials from publish profile
+        id: parse
+        shell: bash
+        env:
+          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+        run: |
+          set -euo pipefail
+          echo "$PUBLISH_PROFILE" > publishProfile.xml
+          python3 - << 'PY'
+import os, xml.etree.ElementTree as ET
+tree = ET.parse('publishProfile.xml')
+root = tree.getroot()
+pp = None
+for p in root.findall('publishProfile'):
+    if p.get('publishMethod') == 'ZipDeploy':
+        pp = p
+        break
+if pp is None:
+    raise SystemExit('ZipDeploy profile not found in publish profile XML')
+pub_url = pp.get('publishUrl')  # e.g. nzhopslookercoa-***.scm.australiaeast-01.azurewebsites.net:443
+host = pub_url.split(':',1)[0]
+user = pp.get('userName')
+pwd  = pp.get('userPWD')
+print(f"::set-output name=host::{host}")
+print(f"::set-output name=user::{user}")
+print(f"::set-output name=pwd::{pwd}")
+PY
 
+      - name: Zip Deploy to Kudu (publish profile)
+        env:
+          KUDU_HOST: ${{ steps.parse.outputs.host }}
+          KUDU_USER: ${{ steps.parse.outputs.user }}
+          KUDU_PASS: ${{ steps.parse.outputs.pwd }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.slot }}" ]; then
+            echo "Note: Slots are not used with direct Kudu zipdeploy; ensure the publish profile corresponds to the slot if required."
+          fi
+          curl -sS -u "$KUDU_USER:$KUDU_PASS" \
+               -X POST \
+               -H "Content-Type: application/zip" \
+               --data-binary @functionapp.zip \
+               "https://$KUDU_HOST/api/zipdeploy?isAsync=true"
+
+      - name: Warm up Function App
+        run: |
+          APP_HOST=${{ steps.parse.outputs.host }}
+          APP_HOST=${APP_HOST/.scm./.}
+          curl -sS --max-time 10 "https://${APP_HOST}" || true
