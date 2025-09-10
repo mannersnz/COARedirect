@@ -41,12 +41,24 @@ jobs:
           if [ -n "${{ github.event.inputs.slot }}" ]; then
             echo "Note: Slots require a slot-specific publish profile."
           fi
-          # Perform zipdeploy
-          curl -fSs -u "$KUDU_USER:$KUDU_PASS" \
-               -X POST \
-               -H "Content-Type: application/zip" \
-               --data-binary @functionapp.zip \
-               "https://$KUDU_HOST/api/zipdeploy?isAsync=true"
+          # Perform zipdeploy with diagnostics
+          ZIP_URL="https://$KUDU_HOST/api/zipdeploy?isAsync=true"
+          echo "Posting to: $ZIP_URL"
+          http_code=$(curl -sS -u "$KUDU_USER:$KUDU_PASS" \
+                           -X POST \
+                           -H "Content-Type: application/zip" \
+                           --data-binary @functionapp.zip \
+                           -D headers.txt \
+                           -o body.txt \
+                           -w "%{http_code}" \
+                           "$ZIP_URL" || true)
+          echo "Response code: $http_code"
+          echo "--- Response headers ---" && sed -n '1,200p' headers.txt || true
+          echo "--- Response body ---" && sed -n '1,200p' body.txt || true
+          if [ "$http_code" != "200" ] && [ "$http_code" != "202" ]; then
+            echo "ZipDeploy failed with HTTP $http_code" >&2
+            exit 1
+          fi
 
       - name: Warm up Function App
         env:
