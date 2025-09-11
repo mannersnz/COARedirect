@@ -31,11 +31,24 @@ def main():
     user = chosen.get("userName", "")
     pwd = chosen.get("userPWD", "")
 
+    # Try to find app/site name for fallback host
+    app_name = None
+    for p in root.findall("publishProfile"):
+        if p.get("msdeploySite"):
+            app_name = p.get("msdeploySite")
+            break
+    if not app_name:
+        # derive from username like $appname
+        if user.startswith("$"):
+            app_name = user[1:]
+    fallback_host = f"{app_name}.scm.azurewebsites.net" if app_name else host
+
     # Emit shell-safe assignments to eval in bash
     def shquote(s: str) -> str:
         return "'" + s.replace("'", "'\"'\"'") + "'"
 
     print(f"KUDU_HOST={shquote(host)}")
+    print(f"KUDU_FALLBACK_HOST={shquote(fallback_host)}")
     print(f"KUDU_USER={shquote(user)}")
     print(f"KUDU_PASS={shquote(pwd)}")
 

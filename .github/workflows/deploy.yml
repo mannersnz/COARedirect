@@ -1,8 +1,6 @@
 name: Deploy Azure Function
 
 on:
-  push:
-    branches: [ "main" ]
   workflow_dispatch:
     inputs:
       slot:
@@ -37,7 +35,7 @@ jobs:
           set -euo pipefail
           # Extract host and credentials
           eval "$(python3 .github/scripts/parse_publish_profile.py)"
-          echo "Using Kudu host: $KUDU_HOST"
+          echo "Using Kudu host: $KUDU_HOST (fallback: $KUDU_FALLBACK_HOST)"
           if [ -n "${{ github.event.inputs.slot }}" ]; then
             echo "Note: Slots require a slot-specific publish profile."
           fi
@@ -55,6 +53,21 @@ jobs:
           echo "Response code: $http_code"
           echo "--- Response headers ---" && sed -n '1,200p' headers.txt || true
           echo "--- Response body ---" && sed -n '1,200p' body.txt || true
+          if [ "$http_code" = "404" ] && [ "$KUDU_FALLBACK_HOST" != "$KUDU_HOST" ]; then
+            echo "Primary Kudu host returned 404. Trying fallback host..."
+            ZIP_URL="https://$KUDU_FALLBACK_HOST/api/zipdeploy?isAsync=true"
+            http_code=$(curl -sS -u "$KUDU_USER:$KUDU_PASS" \
+                             -X POST \
+                             -H "Content-Type: application/zip" \
+                             --data-binary @functionapp.zip \
+                             -D headers.txt \
+                             -o body.txt \
+                             -w "%{http_code}" \
+                             "$ZIP_URL" || true)
+            echo "Fallback response code: $http_code"
+            echo "--- Response headers (fallback) ---" && sed -n '1,200p' headers.txt || true
+            echo "--- Response body (fallback) ---" && sed -n '1,200p' body.txt || true
+          fi
           if [ "$http_code" != "200" ] && [ "$http_code" != "202" ]; then
             echo "ZipDeploy failed with HTTP $http_code" >&2
             exit 1
@@ -66,4 +79,5 @@ jobs:
         run: |
           eval "$(python3 .github/scripts/parse_publish_profile.py)"
           APP_HOST="${KUDU_HOST/.scm./.}"
+          [ -n "$APP_HOST" ] || APP_HOST="${KUDU_FALLBACK_HOST/.scm./.}"
           curl -sS --max-time 10 "https://${APP_HOST}" || true

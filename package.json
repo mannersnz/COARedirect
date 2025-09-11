@@ -1,15 +1,14 @@
 {
   "name": "coaredirect",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Azure Functions redirect for NZHops COA batches to Looker Studio.",
-  "license": "UNLICENSED",
-  "engines": {
-    "node": ">=20"
-  },
+  "version": "1.0.0",
+  "description": "",
   "scripts": {
-    "start": "npx -p azure-functions-core-tools@4 func start",
-    "test": "node -e \"console.log('no tests')\""
+    "start": "func start",
+    "test": "echo \"No tests yet...\""
   },
-  "dependencies": {}
+  "dependencies": {
+    "@azure/functions": "^4.0.0"
+  },
+  "devDependencies": {},
+  "main": "src/{index.js,functions/*.js}"
 }
